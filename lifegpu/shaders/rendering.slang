@@ -1,4 +1,4 @@
-module viewer;
+module rendering;
 
 import constants;
 
@@ -8,10 +8,13 @@ struct SceneConstants
     float y;
     float scale;
     float aspect_ratio;
+    uint textureIndex;
 }
 
 [[vk::push_constant]]
 SceneConstants scene;
+
+Texture2D<uint2> fieldTextures[3];
 
 struct VertexOutput
 {
@@ -41,39 +44,18 @@ VertexOutput vsMain(uint vertexIndex: SV_VertexID)
     return out;
 }
 
-float fractalNoise(float2 pos, int octaves, float persistence)
-{
-    float total = 0.0;
-    float frequency = 1.0;
-    float amplitude = 1.0;
-    float maxValue = 0.0;
-
-    for (int i = 0; i < octaves; ++i)
-    {
-        float n = frac(sin(dot(pos * frequency, float2(12.9898, 78.233))) * 43758.5453);
-        total += n * amplitude;
-        maxValue += amplitude;
-        amplitude *= persistence;
-        frequency *= 2.0;
-    }
-    return total / maxValue;
-}
-
-float noise(float2 pos)
-{
-    return fractalNoise(pos, 5, 0.5);
-}
-
 [shader("pixel")]
-float4 psMain(VertexOutput input) : SV_Target0
+float4 psMain(VertexOutput in) : SV_Target0
 {
-    float2 field_coord = input.field_pos * 1024.0;
-    int2 cell = int2(field_coord);
+    int2 cell = int2(in.field_pos * float2(FIELD_WIDTH, FIELD_HEIGHT) * 8);
+    int2 tex = cell >> 3;
+    int2 rel = cell & 7;
+    uint2 val = fieldTextures[scene.textureIndex].Load(int3(tex, 0));
+    uint chunk = val.x << 32 | val.y;
+    uint state = (chunk >> (rel.x * rel.y)) & 1;
 
-    float n = noise(cell);
-
-    if (n > 0.5)
-        return float4(0.1, 0.2, 0.8, 1);
+    if (state == 1)
+        return float4(0.9, 0.05, 0.05, 1);
     else
-        return float4(0.9, 0.9, 0.9, 1);
+        return float4(0.1, 0.4, 0.7, 1);
 }

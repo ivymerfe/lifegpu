@@ -1,4 +1,4 @@
-package lifevk
+package lifegpu
 
 import "core:math"
 import "base:runtime"
@@ -63,6 +63,8 @@ main :: proc() {
 	defer destroy_vulkan()
 	init_renderer()
 	defer destroy_renderer()
+	init_simulation()
+	defer destroy_simulation()
 
 	last_tick := time.tick_now()
 

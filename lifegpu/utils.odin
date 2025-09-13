@@ -1,4 +1,4 @@
-package lifevk
+package lifegpu
 
 import "core:strings"
 

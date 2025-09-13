@@ -1,4 +1,4 @@
-package lifevk
+package lifegpu
 
 import "core:log"
 import os "core:os"

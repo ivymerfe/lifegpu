@@ -1,4 +1,4 @@
-package lifevk
+package lifegpu
 
 import "base:runtime"
 import "core:log"
@@ -133,10 +133,13 @@ render :: proc(camera: Camera) {
 	}
 	vk_try(vk.WaitForFences(g_device, 1, &fence_acquire, true, max(u64)))
 
+	// Should choose latest free texture and acquire
+	texture_index: u32 = 0
+
 	buffer := g_command_buffer
 
 	vk.ResetCommandBuffer(buffer, {})
-	record_commands(camera, buffer, image_index)
+	record_commands(camera, image_index, texture_index)
 
 	sem_render_finished := g_render_finished_semaphore[image_index]
 	submit_info := vk.SubmitInfo {

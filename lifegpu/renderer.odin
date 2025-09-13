@@ -1,4 +1,4 @@
-package lifevk
+package lifegpu
 
 import "core:log"
 import "core:math"
@@ -8,50 +8,52 @@ import "core:mem"
 import "core:time"
 import vk "vendor:vulkan"
 
-VIEWER_SHADER_FILE :: "shaders/bin/view.spv"
+RENDERING_SHADER_BIN :: "shaders/bin/rendering.spv"
 QUAD_VERTICES :: 6
-MIN_SCALE :: 0.01
+MIN_SCALE :: 0.001
 
+g_descriptor_set_layout: vk.DescriptorSetLayout
+g_descriptor_pool: vk.DescriptorPool
+g_descriptor_set: vk.DescriptorSet
 g_pipeline: vk.Pipeline
 g_pipeline_layout: vk.PipelineLayout
 
 Camera :: struct {
 	x: f32,
 	y: f32,
-	z: f32
+	z: f32,
 }
 
 SceneConstants :: struct {
-	x: f32,
-	y: f32,
-	scale: f32,
-	aspect_ratio: f32
+	x:             f32,
+	y:             f32,
+	scale:         f32,
+	aspect_ratio:  f32,
+	texture_index: u32,
 }
 
 init_renderer :: proc() {
+	create_descriptors()
 	create_pipeline()
-	create_resources()
 }
 
 destroy_renderer :: proc() {
-	destroy_resources()
 	destroy_pipeline()
+	destroy_descriptors()
 }
 
-get_scene_constants :: proc(camera: Camera) -> SceneConstants {
-	return SceneConstants{
+get_scene_constants :: proc(camera: Camera, texture_index: u32) -> SceneConstants {
+	return SceneConstants {
 		x = camera.x,
 		y = camera.y,
 		scale = 1 / (camera.z + MIN_SCALE),
-		aspect_ratio = f32(g_swapchain_extent.width) / f32(g_swapchain_extent.height)
+		aspect_ratio = f32(g_swapchain_extent.width) / f32(g_swapchain_extent.height),
+		texture_index = texture_index,
 	}
 }
 
-record_commands :: proc(
-	camera: Camera,
-	cmd_buffer: vk.CommandBuffer,
-	image_index: u32,
-) {
+record_commands :: proc(camera: Camera, image_index: u32, texture_index: u32) {
+	cmd_buffer := g_command_buffer
 	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 	}
@@ -104,14 +106,24 @@ record_commands :: proc(
 	)
 	vk.CmdSetScissor(cmd_buffer, 0, 1, &vk.Rect2D{offset = {0, 0}, extent = g_swapchain_extent})
 
-	constants := get_scene_constants(camera)
+	constants := get_scene_constants(camera, texture_index)
 	vk.CmdPushConstants(
 		cmd_buffer,
 		g_pipeline_layout,
-		{.VERTEX},
+		{.VERTEX, .FRAGMENT},
 		0,
 		size_of(SceneConstants),
 		&constants,
+	)
+	vk.CmdBindDescriptorSets(
+		cmd_buffer,
+		.GRAPHICS,
+		g_pipeline_layout,
+		0,
+		1,
+		&g_descriptor_set,
+		0,
+		nil,
 	)
 	vk.CmdDraw(cmd_buffer, QUAD_VERTICES, 1, 0, 0)
 	vk.CmdEndRendering(cmd_buffer)
@@ -130,13 +142,45 @@ record_commands :: proc(
 }
 
 @(private = "file")
-create_resources :: proc() {
-	
+create_descriptors :: proc() {
+	tex_binding := vk.DescriptorSetLayoutBinding {
+		binding         = 0,
+		descriptorType  = .SAMPLED_IMAGE,
+		descriptorCount = FIELD_BUFFER_COUNT,
+		stageFlags      = {.FRAGMENT},
+	}
+	create_info := vk.DescriptorSetLayoutCreateInfo {
+		sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		bindingCount = 1,
+		pBindings    = &tex_binding,
+	}
+	vk_try(vk.CreateDescriptorSetLayout(g_device, &create_info, nil, &g_descriptor_set_layout))
+	pool_size := vk.DescriptorPoolSize {
+		type            = .SAMPLED_IMAGE,
+		descriptorCount = FIELD_BUFFER_COUNT,
+	}
+	pool_info := vk.DescriptorPoolCreateInfo {
+		sType         = .DESCRIPTOR_POOL_CREATE_INFO,
+		flags         = {.FREE_DESCRIPTOR_SET},
+		maxSets       = 1,
+		poolSizeCount = 1,
+		pPoolSizes    = &pool_size,
+	}
+	vk_try(vk.CreateDescriptorPool(g_device, &pool_info, nil, &g_descriptor_pool))
+	desc_set_alloc_info := vk.DescriptorSetAllocateInfo {
+		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
+		descriptorPool     = g_descriptor_pool,
+		descriptorSetCount = 1,
+		pSetLayouts        = &g_descriptor_set_layout,
+	}
+	vk_try(vk.AllocateDescriptorSets(g_device, &desc_set_alloc_info, &g_descriptor_set))
 }
 
 @(private = "file")
-destroy_resources :: proc() {
-	
+destroy_descriptors :: proc() {
+	vk_try(vk.FreeDescriptorSets(g_device, g_descriptor_pool, 1, &g_descriptor_set))
+	vk.DestroyDescriptorPool(g_device, g_descriptor_pool, nil)
+	vk.DestroyDescriptorSetLayout(g_device, g_descriptor_set_layout, nil)
 }
 
 recreate_pipeline :: proc() {
@@ -148,12 +192,14 @@ recreate_pipeline :: proc() {
 @(private = "file")
 create_pipeline :: proc() {
 	push_constant_ranges := []vk.PushConstantRange {
-		{stageFlags = {.VERTEX}, offset = 0, size = size_of(SceneConstants)},
+		{stageFlags = {.VERTEX, .FRAGMENT}, offset = 0, size = size_of(SceneConstants)},
 	}
 	layout_info := vk.PipelineLayoutCreateInfo {
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
 		pushConstantRangeCount = 1,
 		pPushConstantRanges    = raw_data(push_constant_ranges),
+		setLayoutCount         = 1,
+		pSetLayouts            = &g_descriptor_set_layout,
 	}
 	vk_try(vk.CreatePipelineLayout(g_device, &layout_info, nil, &g_pipeline_layout))
 
@@ -164,7 +210,7 @@ create_pipeline :: proc() {
 		pDynamicStates    = raw_data(dynamic_states),
 	}
 	vertex_input_info := vk.PipelineVertexInputStateCreateInfo {
-		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 	}
 	input_assembly := vk.PipelineInputAssemblyStateCreateInfo {
 		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -202,7 +248,7 @@ create_pipeline :: proc() {
 		depthCompareOp   = .LESS,
 	}
 
-	module, success := load_shaders_from_file(VIEWER_SHADER_FILE)
+	module, success := load_shaders_from_file(RENDERING_SHADER_BIN)
 	if !success {
 		log.panicf("Failed to load shaders, check if file exists")
 	}
