@@ -8,13 +8,15 @@ struct SceneConstants
     float y;
     float scale;
     float aspect_ratio;
-    uint textureIndex;
+    uint prevTexture;
+    uint currTexture;
+    float delta;
 }
 
 [[vk::push_constant]]
 SceneConstants scene;
 
-Texture2D<uint2> fieldTextures[3];
+Texture2D<uint2> fieldTextures[4];
 
 struct VertexOutput
 {
@@ -44,18 +46,23 @@ VertexOutput vsMain(uint vertexIndex: SV_VertexID)
     return out;
 }
 
+uint loadCell(uint textureIndex, int2 cell)
+{
+    int2 tex = cell >> 3;
+    int2 rel = cell & 7;
+    uint2 val = fieldTextures[textureIndex].Load(int3(tex, 0));
+    uint64_t chunk = (uint64_t)val.x << 32 | val.y;
+    uint state = uint((chunk >> (rel.x * rel.y)) & 1);
+    return state;
+}
+
 [shader("pixel")]
 float4 psMain(VertexOutput in) : SV_Target0
 {
     int2 cell = int2(in.field_pos * float2(FIELD_WIDTH, FIELD_HEIGHT) * 8);
-    int2 tex = cell >> 3;
-    int2 rel = cell & 7;
-    uint2 val = fieldTextures[scene.textureIndex].Load(int3(tex, 0));
-    uint chunk = val.x << 32 | val.y;
-    uint state = (chunk >> (rel.x * rel.y)) & 1;
-
-    if (state == 1)
-        return float4(0.9, 0.05, 0.05, 1);
-    else
-        return float4(0.1, 0.4, 0.7, 1);
+    uint prev_state = loadCell(scene.prevTexture, cell);
+    uint curr_state = loadCell(scene.currTexture, cell);
+    float4 prev_color = prev_state == 1 ? ALIVE_COLOR : DEAD_COLOR;
+    float4 curr_color = curr_state == 1 ? ALIVE_COLOR : DEAD_COLOR;
+    return lerp(prev_color, curr_color, scene.delta * SIM_SPEED);
 }

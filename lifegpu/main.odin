@@ -38,6 +38,8 @@ g_input: InputState = {
 	vspeed = 3,
 }
 
+g_is_running: bool = false
+
 main :: proc() {
 	context.logger = log.create_console_logger()
 	g_context = context
@@ -59,19 +61,15 @@ main :: proc() {
 	glfw.SetScrollCallback(g_window, on_scroll)
 	glfw.SetKeyCallback(g_window, on_input)
 
-	init_vulkan()
-	defer destroy_vulkan()
-	init_renderer()
-	defer destroy_renderer()
-	init_simulation()
-	defer destroy_simulation()
+	init()
+	defer destroy()
 
 	last_tick := time.tick_now()
 
 	for !glfw.WindowShouldClose(g_window) {
 		glfw.PollEvents()
 		if g_should_reload_shaders {
-			recreate_pipeline()
+			reload_renderer()
 			g_should_reload_shaders = false
 		}
 		current_tick := time.tick_now()
@@ -84,6 +82,20 @@ main :: proc() {
 		render(g_camera)
 	}
 	vk.DeviceWaitIdle(g_device)
+}
+
+@(private="file")
+init :: proc() {
+	init_vulkan()
+	init_renderer()
+	init_buffers()
+}
+
+@(private="file")
+destroy :: proc() {
+	destroy_buffers()
+	destroy_renderer()
+	destroy_vulkan()
 }
 
 @(private = "file")

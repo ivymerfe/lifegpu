@@ -5,6 +5,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:math/linalg/glsl"
 import "core:mem"
+import "core:sync"
 import "core:time"
 import vk "vendor:vulkan"
 
@@ -25,11 +26,13 @@ Camera :: struct {
 }
 
 SceneConstants :: struct {
-	x:             f32,
-	y:             f32,
-	scale:         f32,
-	aspect_ratio:  f32,
-	texture_index: u32,
+	x:            f32,
+	y:            f32,
+	scale:        f32,
+	aspect_ratio: f32,
+	prev_texture: u32,
+	curr_texture: u32,
+	delta:        f32,
 }
 
 init_renderer :: proc() {
@@ -42,17 +45,23 @@ destroy_renderer :: proc() {
 	destroy_descriptors()
 }
 
-get_scene_constants :: proc(camera: Camera, texture_index: u32) -> SceneConstants {
+get_scene_constants :: proc(
+	camera: Camera,
+	prev_idx, curr_idx: int,
+	time_delta: f32,
+) -> SceneConstants {
 	return SceneConstants {
 		x = camera.x,
 		y = camera.y,
 		scale = 1 / (camera.z + MIN_SCALE),
 		aspect_ratio = f32(g_swapchain_extent.width) / f32(g_swapchain_extent.height),
-		texture_index = texture_index,
+		prev_texture = u32(prev_idx),
+		curr_texture = u32(curr_idx),
+		delta = time_delta,
 	}
 }
 
-record_commands :: proc(camera: Camera, image_index: u32, texture_index: u32) {
+record_commands :: proc(camera: Camera, image_index: u32, prev_texture, curr_texture: int) {
 	cmd_buffer := g_command_buffer
 	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
@@ -72,7 +81,7 @@ record_commands :: proc(camera: Camera, image_index: u32, texture_index: u32) {
 		{.COLOR},
 	)
 	clear_color := vk.ClearValue {
-		color = {float32 = [4]f32{0.2, 0.8, 0.1, 1}},
+		color = {float32 = [4]f32{0.2, 0.2, 0.2, 1}},
 	}
 	color_attachment := vk.RenderingAttachmentInfo {
 		sType       = .RENDERING_ATTACHMENT_INFO,
@@ -106,7 +115,8 @@ record_commands :: proc(camera: Camera, image_index: u32, texture_index: u32) {
 	)
 	vk.CmdSetScissor(cmd_buffer, 0, 1, &vk.Rect2D{offset = {0, 0}, extent = g_swapchain_extent})
 
-	constants := get_scene_constants(camera, texture_index)
+	time_delta := f32(time.duration_seconds(time.tick_diff(g_last_sim_update, time.tick_now())))
+	constants := get_scene_constants(camera, prev_texture, curr_texture, time_delta)
 	vk.CmdPushConstants(
 		cmd_buffer,
 		g_pipeline_layout,
@@ -139,6 +149,85 @@ record_commands :: proc(camera: Camera, image_index: u32, texture_index: u32) {
 		{.COLOR},
 	)
 	vk.EndCommandBuffer(cmd_buffer)
+}
+
+render :: proc(camera: Camera) {
+	sem_image_available := g_image_available_semaphore
+	fence_acquire := g_acquire_fence
+
+	vk_try(vk.ResetFences(g_device, 1, &fence_acquire))
+
+	image_index: u32
+	acquire_result := vk.AcquireNextImageKHR(
+		g_device,
+		g_swapchain,
+		0,
+		sem_image_available,
+		fence_acquire,
+		&image_index,
+	)
+	#partial switch acquire_result {
+	case .ERROR_OUT_OF_DATE_KHR:
+		recreate_swapchain()
+		return
+	case .SUCCESS, .SUBOPTIMAL_KHR:
+	case:
+		log.panicf("vulkan: acquire next image failure: %v", acquire_result)
+	}
+	vk_try(vk.WaitForFences(g_device, 1, &fence_acquire, true, max(u64)))
+
+	cmd_buffer := g_command_buffer
+	vk.ResetCommandBuffer(cmd_buffer, {})
+
+	curr_texture := acquire_buffer_read()
+	prev_texture := acquire_buffer_read(curr_texture)
+	if curr_texture == -1 || prev_texture == -1 {
+		panic("No free buffers for renderer! Should not happen")
+	}
+	record_commands(camera, image_index, prev_texture, curr_texture)
+
+	sem_render_finished := g_render_finished_semaphore[image_index]
+	submit_info := vk.SubmitInfo {
+		sType                = .SUBMIT_INFO,
+		waitSemaphoreCount   = 1,
+		pWaitSemaphores      = &sem_image_available,
+		pWaitDstStageMask    = &vk.PipelineStageFlags{.COLOR_ATTACHMENT_OUTPUT},
+		commandBufferCount   = 1,
+		pCommandBuffers      = &cmd_buffer,
+		signalSemaphoreCount = 1,
+		pSignalSemaphores    = &sem_render_finished,
+	}
+
+	vk_try(vk.ResetFences(g_device, 1, &g_render_fence))
+
+	sync.lock(&g_graphics_queue_lock)
+	vk_try(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, g_render_fence))
+	sync.unlock(&g_graphics_queue_lock)
+
+	vk_try(vk.WaitForFences(g_device, 1, &g_render_fence, true, max(u64)))
+
+	release_buffer(prev_texture)
+	release_buffer(curr_texture)
+
+	present_info := vk.PresentInfoKHR {
+		sType              = .PRESENT_INFO_KHR,
+		waitSemaphoreCount = 1,
+		pWaitSemaphores    = &sem_render_finished,
+		swapchainCount     = 1,
+		pSwapchains        = &g_swapchain,
+		pImageIndices      = &image_index,
+	}
+	present_result := vk.QueuePresentKHR(g_present_queue, &present_info)
+	switch {
+	case present_result == .ERROR_OUT_OF_DATE_KHR ||
+	     present_result == .SUBOPTIMAL_KHR ||
+	     g_window_resized:
+		g_window_resized = false
+		recreate_swapchain()
+	case present_result == .SUCCESS:
+	case:
+		log.panicf("vulkan: present failure: %v", present_result)
+	}
 }
 
 @(private = "file")
@@ -183,7 +272,7 @@ destroy_descriptors :: proc() {
 	vk.DestroyDescriptorSetLayout(g_device, g_descriptor_set_layout, nil)
 }
 
-recreate_pipeline :: proc() {
+reload_renderer :: proc() {
 	vk.QueueWaitIdle(g_graphics_queue)
 	destroy_pipeline()
 	create_pipeline()

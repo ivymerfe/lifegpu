@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:log"
 import "core:slice"
 import "core:time"
+import "core:sync"
 import glfw "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -13,8 +14,10 @@ g_physical_device: vk.PhysicalDevice
 g_mem_properties: vk.PhysicalDeviceMemoryProperties
 g_deviceName: string
 g_device: vk.Device
+
 g_graphics_queue: vk.Queue
 g_present_queue: vk.Queue
+g_graphics_queue_lock: sync.Mutex
 
 QueueFamilyIdx :: struct {
 	graphics: u32,
@@ -35,7 +38,7 @@ g_command_pool: vk.CommandPool
 g_command_buffer: vk.CommandBuffer
 g_image_available_semaphore: vk.Semaphore
 g_render_finished_semaphore: []vk.Semaphore // Per image
-g_in_flight_fence: vk.Fence
+g_render_fence: vk.Fence
 g_acquire_fence: vk.Fence
 
 vk_try :: proc(result: vk.Result, location := #caller_location) {
@@ -77,7 +80,7 @@ init_vulkan :: proc() {
 		flags = {.SIGNALED},
 	}
 	vk_try(vk.CreateSemaphore(g_device, &sem_info, nil, &g_image_available_semaphore))
-	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_in_flight_fence))
+	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_render_fence))
 	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_acquire_fence))
 	for i in 0 ..< g_swapchain_image_count {
 		vk_try(vk.CreateSemaphore(g_device, &sem_info, nil, &g_render_finished_semaphore[i]))
@@ -88,7 +91,7 @@ init_vulkan :: proc() {
 
 destroy_vulkan :: proc() {
 	vk.DestroySemaphore(g_device, g_image_available_semaphore, nil)
-	vk.DestroyFence(g_device, g_in_flight_fence, nil)
+	vk.DestroyFence(g_device, g_render_fence, nil)
 	vk.DestroyFence(g_device, g_acquire_fence, nil)
 
 	for i in 0 ..< g_swapchain_image_count {
@@ -101,78 +104,6 @@ destroy_vulkan :: proc() {
 	vk.DestroyDevice(g_device, nil)
 	vk.DestroySurfaceKHR(g_instance, g_surface, nil)
 	vk.DestroyInstance(g_instance, nil)
-}
-
-render :: proc(camera: Camera) {
-	fence := g_in_flight_fence
-
-	vk_try(vk.WaitForFences(g_device, 1, &fence, true, max(u64)))
-	vk_try(vk.ResetFences(g_device, 1, &fence))
-
-	sem_image_available := g_image_available_semaphore
-	fence_acquire := g_acquire_fence
-
-	vk_try(vk.ResetFences(g_device, 1, &fence_acquire))
-
-	image_index: u32
-	acquire_result := vk.AcquireNextImageKHR(
-		g_device,
-		g_swapchain,
-		0,
-		sem_image_available,
-		fence_acquire,
-		&image_index,
-	)
-	#partial switch acquire_result {
-	case .ERROR_OUT_OF_DATE_KHR:
-		recreate_swapchain()
-		return
-	case .SUCCESS, .SUBOPTIMAL_KHR:
-	case:
-		log.panicf("vulkan: acquire next image failure: %v", acquire_result)
-	}
-	vk_try(vk.WaitForFences(g_device, 1, &fence_acquire, true, max(u64)))
-
-	// Should choose latest free texture and acquire
-	texture_index: u32 = 0
-
-	buffer := g_command_buffer
-
-	vk.ResetCommandBuffer(buffer, {})
-	record_commands(camera, image_index, texture_index)
-
-	sem_render_finished := g_render_finished_semaphore[image_index]
-	submit_info := vk.SubmitInfo {
-		sType                = .SUBMIT_INFO,
-		waitSemaphoreCount   = 1,
-		pWaitSemaphores      = &sem_image_available,
-		pWaitDstStageMask    = &vk.PipelineStageFlags{.COLOR_ATTACHMENT_OUTPUT},
-		commandBufferCount   = 1,
-		pCommandBuffers      = &buffer,
-		signalSemaphoreCount = 1,
-		pSignalSemaphores    = &sem_render_finished,
-	}
-	vk_try(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, fence))
-
-	present_info := vk.PresentInfoKHR {
-		sType              = .PRESENT_INFO_KHR,
-		waitSemaphoreCount = 1,
-		pWaitSemaphores    = &sem_render_finished,
-		swapchainCount     = 1,
-		pSwapchains        = &g_swapchain,
-		pImageIndices      = &image_index,
-	}
-	present_result := vk.QueuePresentKHR(g_present_queue, &present_info)
-	switch {
-	case present_result == .ERROR_OUT_OF_DATE_KHR ||
-	     present_result == .SUBOPTIMAL_KHR ||
-	     g_window_resized:
-		g_window_resized = false
-		recreate_swapchain()
-	case present_result == .SUCCESS:
-	case:
-		log.panicf("vulkan: present failure: %v", present_result)
-	}
 }
 
 @(private = "file")
@@ -286,6 +217,9 @@ vk_create_logical_device :: proc() {
 		sType                   = .DEVICE_CREATE_INFO,
 		pNext                   = &vk.PhysicalDeviceFeatures2 {
 			sType = .PHYSICAL_DEVICE_FEATURES_2,
+			features = {
+				shaderInt64 = true
+			},
 			pNext = &vk.PhysicalDeviceVulkan13Features {
 				sType = .PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
 				pNext = &vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT {
@@ -294,6 +228,7 @@ vk_create_logical_device :: proc() {
 				},
 				synchronization2 = true,
 				dynamicRendering = true,
+				
 			},
 		},
 		pQueueCreateInfos       = &vk.DeviceQueueCreateInfo {
@@ -322,7 +257,7 @@ find_queue_family_indexes :: proc() -> bool {
 	graphics_idx := -1
 	present_idx := -1
 	for family, i in families {
-		support_graphics := .GRAPHICS in family.queueFlags
+		support_graphics_and_compute := .GRAPHICS in family.queueFlags && .COMPUTE in family.queueFlags
 		support_present: b32
 		vk_try(
 			vk.GetPhysicalDeviceSurfaceSupportKHR(
@@ -332,7 +267,7 @@ find_queue_family_indexes :: proc() -> bool {
 				&support_present,
 			),
 		)
-		if support_graphics {
+		if support_graphics_and_compute {
 			graphics_idx = i
 		}
 		if support_present {
