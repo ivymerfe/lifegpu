@@ -5,7 +5,6 @@ import "core:math"
 import "core:math/linalg"
 import "core:math/linalg/glsl"
 import "core:mem"
-import "core:sync"
 import "core:time"
 import vk "vendor:vulkan"
 

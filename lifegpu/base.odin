@@ -4,7 +4,6 @@ import "base:runtime"
 import "core:log"
 import "core:slice"
 import "core:time"
-import "core:sync"
 import glfw "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -17,7 +16,6 @@ g_device: vk.Device
 
 g_graphics_queue: vk.Queue
 g_present_queue: vk.Queue
-g_graphics_queue_lock: sync.Mutex
 
 QueueFamilyIdx :: struct {
 	graphics: u32,

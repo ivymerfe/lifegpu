@@ -1,7 +1,6 @@
 package lifegpu
 
 import "core:log"
-import "core:sync"
 import "core:time"
 import vk "vendor:vulkan"
 

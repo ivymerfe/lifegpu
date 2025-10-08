@@ -7,7 +7,6 @@ import "core:math"
 import "core:os/os2"
 import "core:slice"
 import "core:strings"
-import "core:sync"
 import "core:thread"
 import "core:time"
 

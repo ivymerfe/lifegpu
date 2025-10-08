@@ -1,6 +1,5 @@
 package lifegpu
 
-import "core:sync"
 import vk "vendor:vulkan"
 
 FIELD_WIDTH :: 512
