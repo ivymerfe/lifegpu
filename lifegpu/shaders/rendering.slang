@@ -16,7 +16,7 @@ struct SceneConstants
 [[vk::push_constant]]
 SceneConstants scene;
 
-Texture2D<uint2> fieldTextures[4];
+readonly RWTexture2D<uint2> fieldTextures[4];
 
 struct VertexOutput
 {
@@ -50,9 +50,9 @@ uint loadCell(uint textureIndex, int2 cell)
 {
     int2 tex = cell >> 3;
     int2 rel = cell & 7;
-    uint2 val = fieldTextures[textureIndex].Load(int3(tex, 0));
+    uint2 val = fieldTextures[textureIndex].Load(tex);
     uint64_t chunk = (uint64_t)val.x << 32 | val.y;
-    uint state = uint((chunk >> (rel.x * rel.y)) & 1);
+    uint state = uint((chunk >> (rel.x << 3 | rel.y)) & 1);
     return state;
 }
 

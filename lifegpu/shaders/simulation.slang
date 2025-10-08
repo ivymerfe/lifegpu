@@ -6,7 +6,7 @@ struct ComputeConstants
 {
     uint readTexture;
     uint writeTexture;
-    float currentTime;
+    uint tickIndex;
     bool randomize;
 }
 
@@ -16,14 +16,22 @@ ComputeConstants scene;
 RWTexture2D<uint2> fieldTextures[4];
 
 [shader("compute")]
-[numthreads(FIELD_WIDTH, FIELD_HEIGHT, 1)]
+[numthreads(WORKGROUP_SIZE, WORKGROUP_SIZE, 1)]
 void compMain(uint3 threadId: SV_DispatchThreadID)
 {
     if (scene.randomize)
     {
-        uint seed = threadId.x * 73856093u ^ threadId.y * 19349663u ^ threadId.z * 83492791u ^ asuint(scene.currentTime);
-        uint2 noise = uint2(seed, seed >> 16);
+        int x = int(threadId.x + scene.tickIndex * 4);
+        int y = int(threadId.y);
 
-        fieldTextures[scene.writeTexture][int2(threadId.xy)] = noise;
+        uint rand = ((x * 73851093) ^ (y * 19349663) ^ (scene.tickIndex * 83412791)) & 0xFFFFFFFF;
+
+        uint shiftA = scene.tickIndex % 32;
+        uint shiftB = (scene.tickIndex * 3) % 32;
+        uint patternA = (rand << shiftA) | (rand >> (32 - shiftA));
+        uint patternB = (rand << shiftB) | (rand >> (32 - shiftB));
+        uint2 value = uint2(patternA, patternB);
+        
+        fieldTextures[scene.writeTexture][int2(threadId.xy)] = value;
     }
 }

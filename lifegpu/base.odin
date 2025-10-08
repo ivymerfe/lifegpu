@@ -33,13 +33,8 @@ g_swapchain_image_count: u32
 g_swapchain_images: []vk.Image
 g_swapchain_image_views: []vk.ImageView
 
-g_command_pool: vk.CommandPool
-
-g_command_buffer: vk.CommandBuffer
-g_image_available_semaphore: vk.Semaphore
-g_render_finished_semaphore: []vk.Semaphore // Per image
-g_render_fence: vk.Fence
-g_acquire_fence: vk.Fence
+g_base_cmd_pool: vk.CommandPool
+g_base_cmd_buffer: vk.CommandBuffer
 
 vk_try :: proc(result: vk.Result, location := #caller_location) {
 	if result != .SUCCESS {
@@ -47,7 +42,7 @@ vk_try :: proc(result: vk.Result, location := #caller_location) {
 	}
 }
 
-init_vulkan :: proc() {
+create_vulkan :: proc() {
 	vk_create_instance()
 
 	vk_try(glfw.CreateWindowSurface(g_instance, g_window, nil, &g_surface))
@@ -61,44 +56,21 @@ init_vulkan :: proc() {
 		flags            = {.RESET_COMMAND_BUFFER},
 		queueFamilyIndex = g_queue_family_indexes.graphics,
 	}
-	vk_try(vk.CreateCommandPool(g_device, &cmd_pool_info, nil, &g_command_pool))
+	vk_try(vk.CreateCommandPool(g_device, &cmd_pool_info, nil, &g_base_cmd_pool))
 
 	cmd_buffer_info := vk.CommandBufferAllocateInfo {
 		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
 		level              = .PRIMARY,
-		commandPool        = g_command_pool,
+		commandPool        = g_base_cmd_pool,
 		commandBufferCount = 1,
 	}
-	vk_try(vk.AllocateCommandBuffers(g_device, &cmd_buffer_info, &g_command_buffer))
-
-	g_render_finished_semaphore = make([]vk.Semaphore, g_swapchain_image_count)
-	sem_info := vk.SemaphoreCreateInfo {
-		sType = .SEMAPHORE_CREATE_INFO,
-	}
-	fence_info := vk.FenceCreateInfo {
-		sType = .FENCE_CREATE_INFO,
-		flags = {.SIGNALED},
-	}
-	vk_try(vk.CreateSemaphore(g_device, &sem_info, nil, &g_image_available_semaphore))
-	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_render_fence))
-	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_acquire_fence))
-	for i in 0 ..< g_swapchain_image_count {
-		vk_try(vk.CreateSemaphore(g_device, &sem_info, nil, &g_render_finished_semaphore[i]))
-	}
+	vk_try(vk.AllocateCommandBuffers(g_device, &cmd_buffer_info, &g_base_cmd_buffer))
 
 	log.info("Vulkan initialised")
 }
 
 destroy_vulkan :: proc() {
-	vk.DestroySemaphore(g_device, g_image_available_semaphore, nil)
-	vk.DestroyFence(g_device, g_render_fence, nil)
-	vk.DestroyFence(g_device, g_acquire_fence, nil)
-
-	for i in 0 ..< g_swapchain_image_count {
-		vk.DestroySemaphore(g_device, g_render_finished_semaphore[i], nil)
-	}
-	delete(g_render_finished_semaphore)
-	vk.DestroyCommandPool(g_device, g_command_pool, nil)
+	vk.DestroyCommandPool(g_device, g_base_cmd_pool, nil)
 
 	vk_destroy_swapchain()
 	vk.DestroyDevice(g_device, nil)

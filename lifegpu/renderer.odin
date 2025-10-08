@@ -13,11 +13,16 @@ RENDERING_SHADER_BIN :: "shaders/bin/rendering.spv"
 QUAD_VERTICES :: 6
 MIN_SCALE :: 0.001
 
-g_descriptor_set_layout: vk.DescriptorSetLayout
-g_descriptor_pool: vk.DescriptorPool
-g_descriptor_set: vk.DescriptorSet
-g_pipeline: vk.Pipeline
-g_pipeline_layout: vk.PipelineLayout
+g_render_cmd_pool: vk.CommandPool
+
+g_render_cmd_buffer: vk.CommandBuffer
+g_image_available_semaphore: vk.Semaphore
+g_render_finished_semaphore: []vk.Semaphore // Per image
+g_render_fence: vk.Fence
+g_acquire_fence: vk.Fence
+
+g_graphics_pipeline: vk.Pipeline
+g_graphics_pipeline_layout: vk.PipelineLayout
 
 Camera :: struct {
 	x: f32,
@@ -35,14 +40,50 @@ SceneConstants :: struct {
 	delta:        f32,
 }
 
-init_renderer :: proc() {
-	create_descriptors()
+create_renderer :: proc() {
+	cmd_pool_info := vk.CommandPoolCreateInfo {
+		sType            = .COMMAND_POOL_CREATE_INFO,
+		flags            = {.RESET_COMMAND_BUFFER},
+		queueFamilyIndex = g_queue_family_indexes.graphics,
+	}
+	vk_try(vk.CreateCommandPool(g_device, &cmd_pool_info, nil, &g_render_cmd_pool))
+
+	cmd_buffer_info := vk.CommandBufferAllocateInfo {
+		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
+		level              = .PRIMARY,
+		commandPool        = g_render_cmd_pool,
+		commandBufferCount = 1,
+	}
+	vk_try(vk.AllocateCommandBuffers(g_device, &cmd_buffer_info, &g_render_cmd_buffer))
+
+	g_render_finished_semaphore = make([]vk.Semaphore, g_swapchain_image_count)
+	sem_info := vk.SemaphoreCreateInfo {
+		sType = .SEMAPHORE_CREATE_INFO,
+	}
+	fence_info := vk.FenceCreateInfo {
+		sType = .FENCE_CREATE_INFO,
+		flags = {.SIGNALED},
+	}
+	vk_try(vk.CreateSemaphore(g_device, &sem_info, nil, &g_image_available_semaphore))
+	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_render_fence))
+	vk_try(vk.CreateFence(g_device, &fence_info, nil, &g_acquire_fence))
+	for i in 0 ..< g_swapchain_image_count {
+		vk_try(vk.CreateSemaphore(g_device, &sem_info, nil, &g_render_finished_semaphore[i]))
+	}
 	create_pipeline()
 }
 
 destroy_renderer :: proc() {
+	vk.DestroySemaphore(g_device, g_image_available_semaphore, nil)
+	vk.DestroyFence(g_device, g_render_fence, nil)
+	vk.DestroyFence(g_device, g_acquire_fence, nil)
+
+	for i in 0 ..< g_swapchain_image_count {
+		vk.DestroySemaphore(g_device, g_render_finished_semaphore[i], nil)
+	}
+	delete(g_render_finished_semaphore)
+	vk.DestroyCommandPool(g_device, g_render_cmd_pool, nil)
 	destroy_pipeline()
-	destroy_descriptors()
 }
 
 get_scene_constants :: proc(
@@ -61,8 +102,9 @@ get_scene_constants :: proc(
 	}
 }
 
-record_commands :: proc(camera: Camera, image_index: u32, prev_texture, curr_texture: int) {
-	cmd_buffer := g_command_buffer
+@(private = "file")
+record_commands :: proc(camera: Camera, image_index: u32) {
+	cmd_buffer := g_render_cmd_buffer
 	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 	}
@@ -99,7 +141,7 @@ record_commands :: proc(camera: Camera, image_index: u32, prev_texture, curr_tex
 		pColorAttachments = &color_attachment,
 	}
 	vk.CmdBeginRendering(cmd_buffer, &rendering_info)
-	vk.CmdBindPipeline(cmd_buffer, .GRAPHICS, g_pipeline)
+	vk.CmdBindPipeline(cmd_buffer, .GRAPHICS, g_graphics_pipeline)
 	vk.CmdSetViewport(
 		cmd_buffer,
 		0,
@@ -116,10 +158,10 @@ record_commands :: proc(camera: Camera, image_index: u32, prev_texture, curr_tex
 	vk.CmdSetScissor(cmd_buffer, 0, 1, &vk.Rect2D{offset = {0, 0}, extent = g_swapchain_extent})
 
 	time_delta := f32(time.duration_seconds(time.tick_diff(g_last_sim_update, time.tick_now())))
-	constants := get_scene_constants(camera, prev_texture, curr_texture, time_delta)
+	constants := get_scene_constants(camera, g_prev_field, g_curr_field, time_delta)
 	vk.CmdPushConstants(
 		cmd_buffer,
-		g_pipeline_layout,
+		g_graphics_pipeline_layout,
 		{.VERTEX, .FRAGMENT},
 		0,
 		size_of(SceneConstants),
@@ -128,7 +170,7 @@ record_commands :: proc(camera: Camera, image_index: u32, prev_texture, curr_tex
 	vk.CmdBindDescriptorSets(
 		cmd_buffer,
 		.GRAPHICS,
-		g_pipeline_layout,
+		g_graphics_pipeline_layout,
 		0,
 		1,
 		&g_descriptor_set,
@@ -176,15 +218,10 @@ render :: proc(camera: Camera) {
 	}
 	vk_try(vk.WaitForFences(g_device, 1, &fence_acquire, true, max(u64)))
 
-	cmd_buffer := g_command_buffer
+	cmd_buffer := g_render_cmd_buffer
 	vk.ResetCommandBuffer(cmd_buffer, {})
 
-	curr_texture := acquire_buffer_read()
-	prev_texture := acquire_buffer_read(curr_texture)
-	if curr_texture == -1 || prev_texture == -1 {
-		panic("No free buffers for renderer! Should not happen")
-	}
-	record_commands(camera, image_index, prev_texture, curr_texture)
+	record_commands(camera, image_index)
 
 	sem_render_finished := g_render_finished_semaphore[image_index]
 	submit_info := vk.SubmitInfo {
@@ -200,14 +237,8 @@ render :: proc(camera: Camera) {
 
 	vk_try(vk.ResetFences(g_device, 1, &g_render_fence))
 
-	sync.lock(&g_graphics_queue_lock)
 	vk_try(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, g_render_fence))
-	sync.unlock(&g_graphics_queue_lock)
-
 	vk_try(vk.WaitForFences(g_device, 1, &g_render_fence, true, max(u64)))
-
-	release_buffer(prev_texture)
-	release_buffer(curr_texture)
 
 	present_info := vk.PresentInfoKHR {
 		sType              = .PRESENT_INFO_KHR,
@@ -230,48 +261,6 @@ render :: proc(camera: Camera) {
 	}
 }
 
-@(private = "file")
-create_descriptors :: proc() {
-	tex_binding := vk.DescriptorSetLayoutBinding {
-		binding         = 0,
-		descriptorType  = .SAMPLED_IMAGE,
-		descriptorCount = FIELD_BUFFER_COUNT,
-		stageFlags      = {.FRAGMENT},
-	}
-	create_info := vk.DescriptorSetLayoutCreateInfo {
-		sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		bindingCount = 1,
-		pBindings    = &tex_binding,
-	}
-	vk_try(vk.CreateDescriptorSetLayout(g_device, &create_info, nil, &g_descriptor_set_layout))
-	pool_size := vk.DescriptorPoolSize {
-		type            = .SAMPLED_IMAGE,
-		descriptorCount = FIELD_BUFFER_COUNT,
-	}
-	pool_info := vk.DescriptorPoolCreateInfo {
-		sType         = .DESCRIPTOR_POOL_CREATE_INFO,
-		flags         = {.FREE_DESCRIPTOR_SET},
-		maxSets       = 1,
-		poolSizeCount = 1,
-		pPoolSizes    = &pool_size,
-	}
-	vk_try(vk.CreateDescriptorPool(g_device, &pool_info, nil, &g_descriptor_pool))
-	desc_set_alloc_info := vk.DescriptorSetAllocateInfo {
-		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
-		descriptorPool     = g_descriptor_pool,
-		descriptorSetCount = 1,
-		pSetLayouts        = &g_descriptor_set_layout,
-	}
-	vk_try(vk.AllocateDescriptorSets(g_device, &desc_set_alloc_info, &g_descriptor_set))
-}
-
-@(private = "file")
-destroy_descriptors :: proc() {
-	vk_try(vk.FreeDescriptorSets(g_device, g_descriptor_pool, 1, &g_descriptor_set))
-	vk.DestroyDescriptorPool(g_device, g_descriptor_pool, nil)
-	vk.DestroyDescriptorSetLayout(g_device, g_descriptor_set_layout, nil)
-}
-
 reload_renderer :: proc() {
 	vk.QueueWaitIdle(g_graphics_queue)
 	destroy_pipeline()
@@ -290,7 +279,7 @@ create_pipeline :: proc() {
 		setLayoutCount         = 1,
 		pSetLayouts            = &g_descriptor_set_layout,
 	}
-	vk_try(vk.CreatePipelineLayout(g_device, &layout_info, nil, &g_pipeline_layout))
+	vk_try(vk.CreatePipelineLayout(g_device, &layout_info, nil, &g_graphics_pipeline_layout))
 
 	dynamic_states := []vk.DynamicState{.VIEWPORT, .SCISSOR}
 	dynamic_state := vk.PipelineDynamicStateCreateInfo {
@@ -374,17 +363,17 @@ create_pipeline :: proc() {
 		pColorBlendState    = &color_blending,
 		pDynamicState       = &dynamic_state,
 		pDepthStencilState  = &depth_stencil_state,
-		layout              = g_pipeline_layout,
+		layout              = g_graphics_pipeline_layout,
 		subpass             = 0,
 		basePipelineIndex   = -1,
 	}
-	vk_try(vk.CreateGraphicsPipelines(g_device, 0, 1, &pipeline_info, nil, &g_pipeline))
+	vk_try(vk.CreateGraphicsPipelines(g_device, 0, 1, &pipeline_info, nil, &g_graphics_pipeline))
 
 	vk.DestroyShaderModule(g_device, module, nil)
 }
 
 @(private = "file")
 destroy_pipeline :: proc() {
-	vk.DestroyPipelineLayout(g_device, g_pipeline_layout, nil)
-	vk.DestroyPipeline(g_device, g_pipeline, nil)
+	vk.DestroyPipelineLayout(g_device, g_graphics_pipeline_layout, nil)
+	vk.DestroyPipeline(g_device, g_graphics_pipeline, nil)
 }

@@ -5,91 +5,43 @@ import vk "vendor:vulkan"
 
 FIELD_WIDTH :: 512
 FIELD_HEIGHT :: 512
-FIELD_BUFFER_COUNT :: 4 // one free, two rendering (transition), one processing
-
-BufferUsageType :: enum {
-	NOT_USED,
-	READING,
-	WRITING,
-}
+FIELD_BUFFER_COUNT :: 4
 
 FieldBuffer :: struct {
 	image:       vk.Image,
 	memory:      vk.DeviceMemory,
 	view:        vk.ImageView,
-	usage:       BufferUsageType,
-	last_update: i64,
 }
 
 g_field_buffers: [FIELD_BUFFER_COUNT]FieldBuffer
 
-buffer_lock: sync.Mutex
+g_prev_field := 0
+g_curr_field := 1
+g_next_field := 2
 
-acquire_buffer_read :: proc(ignore_index: int = -1) -> int {
-	sync.lock(&buffer_lock)
-	defer sync.unlock(&buffer_lock)
-	idx := -1
-	upd: i64 = -1
-	for i in 0 ..< FIELD_BUFFER_COUNT {
-		if i == ignore_index {
-			continue
-		}
-		if g_field_buffers[i].usage != .WRITING && g_field_buffers[i].last_update > upd {
-			idx = i
-			upd = g_field_buffers[i].last_update
-		}
-	}
-	if idx != -1 {
-		g_field_buffers[idx].usage = .READING
-	}
-	return idx
+step_buffers :: proc() {
+	g_prev_field = (g_prev_field + 1) % FIELD_BUFFER_COUNT
+	g_curr_field = (g_curr_field + 1) % FIELD_BUFFER_COUNT
+	g_next_field = (g_next_field + 1) % FIELD_BUFFER_COUNT
 }
 
-acquire_buffer_write :: proc() -> int {
-	sync.lock(&buffer_lock)
-	defer sync.unlock(&buffer_lock)
-	idx := -1
-	upd: i64 = -1
-	for i in 0 ..< FIELD_BUFFER_COUNT {
-		if g_field_buffers[i].usage != .WRITING && g_field_buffers[i].last_update > upd {
-			idx = i
-			upd = g_field_buffers[i].last_update
-		}
-	}
-	if idx != -1 {
-		g_field_buffers[idx].usage = .WRITING
-	}
-	return idx
-}
-
-release_buffer :: proc(buffer_index: int) {
-	sync.lock(&buffer_lock)
-	defer sync.unlock(&buffer_lock)
-	if g_field_buffers[buffer_index].usage == .WRITING {
-		g_field_buffers[buffer_index].last_update += 1
-	}
-	g_field_buffers[buffer_index].usage = .NOT_USED
-}
-
-init_buffers :: proc() {
+create_buffers :: proc() {
 	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 	}
-	vk.BeginCommandBuffer(g_command_buffer, &begin_info)
+	vk.BeginCommandBuffer(g_base_cmd_buffer, &begin_info)
 	for i in 0 ..< FIELD_BUFFER_COUNT {
 		g_field_buffers[i] = create_field_buffer()
 	}
-	vk.EndCommandBuffer(g_command_buffer)
+	vk.EndCommandBuffer(g_base_cmd_buffer)
 	submit_info := vk.SubmitInfo {
 		sType              = .SUBMIT_INFO,
 		waitSemaphoreCount = 0,
 		commandBufferCount = 1,
-		pCommandBuffers    = &g_command_buffer,
+		pCommandBuffers    = &g_base_cmd_buffer,
 	}
-	fence := g_render_fence
-	vk_try(vk.ResetFences(g_device, 1, &fence))
-	vk_try(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, fence))
-	vk_try(vk.WaitForFences(g_device, 1, &fence, true, max(u64)))
+	vk_try(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, {}))
+	vk_try(vk.QueueWaitIdle(g_graphics_queue))
 
 	image_infos: [FIELD_BUFFER_COUNT]vk.DescriptorImageInfo
 	for i in 0 ..< FIELD_BUFFER_COUNT {
@@ -104,7 +56,7 @@ init_buffers :: proc() {
 		dstBinding      = 0,
 		dstArrayElement = 0,
 		descriptorCount = FIELD_BUFFER_COUNT,
-		descriptorType  = .SAMPLED_IMAGE,
+		descriptorType  = .STORAGE_IMAGE,
 		pImageInfo      = &image_infos[0],
 	}
 	vk.UpdateDescriptorSets(g_device, 1, &desc_write, 0, nil)
@@ -122,18 +74,18 @@ create_field_buffer :: proc() -> (buf: FieldBuffer) {
 		.R32G32_UINT,
 		FIELD_WIDTH,
 		FIELD_HEIGHT,
-		{.SAMPLED, .STORAGE},
+		{.STORAGE},
 		.UNDEFINED,
 	)
 	transition_image_layout(
-		g_command_buffer,
+		g_base_cmd_buffer,
 		image,
 		.UNDEFINED,
 		.GENERAL,
 		{},
 		{.SHADER_READ},
 		{.TOP_OF_PIPE},
-		{.FRAGMENT_SHADER},
+		{.FRAGMENT_SHADER, .COMPUTE_SHADER},
 		{.COLOR},
 	)
 	create_view_info := vk.ImageViewCreateInfo {
@@ -145,8 +97,6 @@ create_field_buffer :: proc() -> (buf: FieldBuffer) {
 	}
 	buf.image = image
 	buf.memory = mem
-	buf.usage = .NOT_USED
-	buf.last_update = 0
 	vk_try(vk.CreateImageView(g_device, &create_view_info, nil, &buf.view))
 	return
 }

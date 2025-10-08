@@ -1,12 +1,13 @@
 package lifegpu
 
-import "core:math"
 import "base:runtime"
 import "core:fmt"
 import "core:log"
+import "core:math"
 import "core:os/os2"
 import "core:slice"
 import "core:strings"
+import "core:sync"
 import "core:thread"
 import "core:time"
 
@@ -38,7 +39,7 @@ g_input: InputState = {
 	vspeed = 3,
 }
 
-g_is_running: bool = false
+SIMULATE_EVERY_N_FRAMES :: 10
 
 main :: proc() {
 	context.logger = log.create_console_logger()
@@ -61,15 +62,16 @@ main :: proc() {
 	glfw.SetScrollCallback(g_window, on_scroll)
 	glfw.SetKeyCallback(g_window, on_input)
 
-	init()
+	create()
 	defer destroy()
 
 	last_tick := time.tick_now()
-
+	frame_index := 0
 	for !glfw.WindowShouldClose(g_window) {
 		glfw.PollEvents()
 		if g_should_reload_shaders {
 			reload_renderer()
+			reload_simulation()
 			g_should_reload_shaders = false
 		}
 		current_tick := time.tick_now()
@@ -80,21 +82,30 @@ main :: proc() {
 		g_camera.x += g_input.x_movement * g_input.hspeed * h_speed_factor * tick_delta
 		g_camera.y += g_input.y_movement * g_input.hspeed * h_speed_factor * tick_delta
 		render(g_camera)
+		if frame_index % SIMULATE_EVERY_N_FRAMES == 0 {
+			simulate()
+		}
+		frame_index += 1
 	}
+
 	vk.DeviceWaitIdle(g_device)
 }
 
-@(private="file")
-init :: proc() {
-	init_vulkan()
-	init_renderer()
-	init_buffers()
+@(private = "file")
+create :: proc() {
+	create_vulkan()
+	create_descriptors()
+	create_buffers()
+	create_renderer()
+	create_simulation()
 }
 
-@(private="file")
+@(private = "file")
 destroy :: proc() {
-	destroy_buffers()
+	destroy_simulation()
 	destroy_renderer()
+	destroy_buffers()
+	destroy_descriptors()
 	destroy_vulkan()
 }
 
