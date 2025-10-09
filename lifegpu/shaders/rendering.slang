@@ -16,7 +16,7 @@ struct SceneConstants
 [[vk::push_constant]]
 SceneConstants scene;
 
-readonly RWTexture2D<uint2> fieldTextures[4];
+readonly RWTexture2D<uint2> fieldTextures[NUM_FIELD_TEXTURES];
 
 struct VertexOutput
 {

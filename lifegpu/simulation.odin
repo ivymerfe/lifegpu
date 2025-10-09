@@ -121,6 +121,8 @@ record_commands :: proc(randomize: bool) {
 }
 
 simulate :: proc(randomize: bool) {
+	// I have to wait till renderer finishes to ensure buffers are not in use
+	vk_try(vk.WaitForFences(g_device, 1, &g_render_fence, true, max(u64)))
 	vk_try(vk.WaitForFences(g_device, 1, &g_compute_fence, true, max(u64)))
 	step_buffers()
 	g_last_sim_update = time.tick_now()

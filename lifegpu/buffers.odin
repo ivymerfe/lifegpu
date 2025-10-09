@@ -4,7 +4,7 @@ import vk "vendor:vulkan"
 
 FIELD_WIDTH :: 512
 FIELD_HEIGHT :: 512
-FIELD_BUFFER_COUNT :: 4
+FIELD_BUFFER_COUNT :: 3
 
 FieldBuffer :: struct {
 	image:       vk.Image,

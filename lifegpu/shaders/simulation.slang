@@ -13,7 +13,7 @@ struct ComputeConstants
 [[vk::push_constant]]
 ComputeConstants consts;
 
-RWTexture2D<uint2> fieldTextures[4];
+RWTexture2D<uint2> fieldTextures[NUM_FIELD_TEXTURES];
 
 uint2 readField(int2 pos)
 {

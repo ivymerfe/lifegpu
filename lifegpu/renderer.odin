@@ -193,6 +193,8 @@ record_commands :: proc(camera: Camera, image_index: u32) {
 }
 
 render :: proc(camera: Camera) {
+	vk_try(vk.WaitForFences(g_device, 1, &g_render_fence, true, max(u64)))
+	
 	sem_image_available := g_image_available_semaphore
 	fence_acquire := g_acquire_fence
 
@@ -235,9 +237,7 @@ render :: proc(camera: Camera) {
 	}
 
 	vk_try(vk.ResetFences(g_device, 1, &g_render_fence))
-
 	vk_try(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, g_render_fence))
-	vk_try(vk.WaitForFences(g_device, 1, &g_render_fence, true, max(u64)))
 
 	present_info := vk.PresentInfoKHR {
 		sType              = .PRESENT_INFO_KHR,
