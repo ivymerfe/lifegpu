@@ -74,14 +74,6 @@ main :: proc() {
 			reload_simulation()
 			g_should_reload_shaders = false
 		}
-		current_tick := time.tick_now()
-		tick_delta := f32(time.duration_seconds(time.tick_diff(last_tick, current_tick)))
-		last_tick = current_tick
-		g_camera.z = g_camera.z * math.pow(g_input.vspeed, g_input.z_movement * tick_delta)
-		h_speed_factor := (g_camera.z + MIN_SCALE)
-		g_camera.x += g_input.x_movement * g_input.hspeed * h_speed_factor * tick_delta
-		g_camera.y += g_input.y_movement * g_input.hspeed * h_speed_factor * tick_delta
-		render(g_camera)
 		if g_input.rnd_pressed {
 			simulate(true)
 			g_input.rnd_pressed = false
@@ -89,6 +81,15 @@ main :: proc() {
 		if frame_index % SIMULATE_EVERY_N_FRAMES == 0 {
 			simulate(false)
 		}
+		current_tick := time.tick_now()
+		tick_delta := f32(time.duration_seconds(time.tick_diff(last_tick, current_tick)))
+		last_tick = current_tick
+		
+		g_camera.z = g_camera.z * math.pow(g_input.vspeed, g_input.z_movement * tick_delta)
+		h_speed_factor := (g_camera.z + MIN_SCALE)
+		g_camera.x += g_input.x_movement * g_input.hspeed * h_speed_factor * tick_delta
+		g_camera.y += g_input.y_movement * g_input.hspeed * h_speed_factor * tick_delta
+		render(g_camera)
 		frame_index += 1
 	}
 
