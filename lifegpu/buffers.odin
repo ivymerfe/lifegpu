@@ -2,8 +2,8 @@ package lifegpu
 
 import vk "vendor:vulkan"
 
-FIELD_WIDTH :: 512
-FIELD_HEIGHT :: 512
+FIELD_WIDTH :: 2048
+FIELD_HEIGHT :: 2048
 FIELD_BUFFER_COUNT :: 3
 
 FieldBuffer :: struct {
