@@ -5,7 +5,7 @@ import "core:time"
 import vk "vendor:vulkan"
 
 SIMULATION_SHADER_BIN :: "shaders/bin/simulation.spv"
-WORKGROUP_SIZE :: 32
+WORKGROUP_SIZE :: 16
 
 g_last_sim_update: time.Tick
 
@@ -53,7 +53,7 @@ destroy_simulation :: proc() {
 }
 
 @(private = "file")
-record_commands :: proc() {
+record_commands :: proc(randomize: bool) {
 	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 	}
@@ -78,7 +78,7 @@ record_commands :: proc() {
 		readTexture  = u32(g_curr_field),
 		writeTexture = u32(g_next_field),
 		tickIndex    = g_compute_tick_idx,
-		randomize    = true,
+		randomize    = b32(randomize),
 	}
 	vk.CmdPushConstants(
 		g_compute_cmd_buffer,
@@ -120,14 +120,14 @@ record_commands :: proc() {
 	vk.EndCommandBuffer(g_compute_cmd_buffer)
 }
 
-simulate :: proc() {
+simulate :: proc(randomize: bool) {
 	vk_try(vk.WaitForFences(g_device, 1, &g_compute_fence, true, max(u64)))
 	step_buffers()
 	g_last_sim_update = time.tick_now()
 	g_compute_tick_idx += 1
 
 	vk.ResetCommandBuffer(g_compute_cmd_buffer, {})
-	record_commands()
+	record_commands(randomize)
 
 	submit_info := vk.SubmitInfo {
 		sType              = .SUBMIT_INFO,

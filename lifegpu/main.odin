@@ -27,11 +27,12 @@ g_camera: Camera = {
 }
 
 InputState :: struct {
-	x_movement: f32,
-	y_movement: f32,
-	z_movement: f32,
-	hspeed:     f32,
-	vspeed:     f32,
+	x_movement:  f32,
+	y_movement:  f32,
+	z_movement:  f32,
+	hspeed:      f32,
+	vspeed:      f32,
+	rnd_pressed: b32,
 }
 g_input: InputState = {
 	hspeed = 1.8,
@@ -81,8 +82,12 @@ main :: proc() {
 		g_camera.x += g_input.x_movement * g_input.hspeed * h_speed_factor * tick_delta
 		g_camera.y += g_input.y_movement * g_input.hspeed * h_speed_factor * tick_delta
 		render(g_camera)
+		if g_input.rnd_pressed {
+			simulate(true)
+			g_input.rnd_pressed = false
+		}
 		if frame_index % SIMULATE_EVERY_N_FRAMES == 0 {
-			simulate()
+			simulate(false)
 		}
 		frame_index += 1
 	}
@@ -122,6 +127,10 @@ on_input :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods: i3
 				g_camera.x = 0
 				g_camera.y = 0
 				g_camera.z = 0.5
+			}
+		case glfw.KEY_F:
+			{
+				g_input.rnd_pressed = true
 			}
 		}
 	}
