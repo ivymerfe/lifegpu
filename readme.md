@@ -1,5 +1,3 @@
 # LifeGPU
 
-Game of Life implementation using Vulkan graphics API
-
-Work in progress
+Game of Life implementation using Vulkan compute shaders
