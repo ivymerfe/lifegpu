@@ -1,14 +1,10 @@
 package lifegpu
 
 import "core:log"
-import "core:math"
-import "core:math/linalg"
-import "core:math/linalg/glsl"
-import "core:mem"
 import "core:time"
 import vk "vendor:vulkan"
 
-RENDERING_SHADER_BIN :: "shaders/bin/rendering.spv"
+RENDERING_SHADER_BIN :: "shaders/rendering.spv"
 QUAD_VERTICES :: 6
 MIN_SCALE :: 0.001
 
@@ -194,7 +190,7 @@ record_commands :: proc(camera: Camera, image_index: u32) {
 
 render :: proc(camera: Camera) {
 	vk_try(vk.WaitForFences(g_device, 1, &g_render_fence, true, max(u64)))
-	
+
 	sem_image_available := g_image_available_semaphore
 	fence_acquire := g_acquire_fence
 
@@ -204,7 +200,7 @@ render :: proc(camera: Camera) {
 	acquire_result := vk.AcquireNextImageKHR(
 		g_device,
 		g_swapchain,
-		0,
+		max(u64),
 		sem_image_available,
 		fence_acquire,
 		&image_index,

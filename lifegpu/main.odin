@@ -1,11 +1,9 @@
 package lifegpu
 
 import "base:runtime"
-import "core:fmt"
 import "core:log"
 import "core:math"
-import "core:os/os2"
-import "core:slice"
+import "core:os"
 import "core:strings"
 import "core:thread"
 import "core:time"
@@ -183,11 +181,11 @@ recompile_shaders :: proc() {
 
 	call_compiler_thread :: proc() {
 		context = g_context
-		desc := os2.Process_Desc {
+		desc := os.Process_Desc {
 			working_dir = "shaders",
 			command     = []string{"bash", "compile.sh"},
 		}
-		state, stdout, stderr, err := os2.process_exec(desc, g_context.allocator)
+		state, stdout, stderr, err := os.process_exec(desc, g_context.allocator)
 		log.info(strings.truncate_to_byte(string(stdout), 0))
 		log.info(strings.truncate_to_byte(string(stderr), 0))
 		log.infof("Compiler exited with code %d", state.exit_code)

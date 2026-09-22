@@ -3,8 +3,8 @@ package lifegpu
 import "base:runtime"
 import "core:log"
 import "core:slice"
-import "core:time"
-import glfw "vendor:glfw"
+
+import "vendor:glfw"
 import vk "vendor:vulkan"
 
 g_instance: vk.Instance
@@ -187,9 +187,7 @@ vk_create_logical_device :: proc() {
 		sType                   = .DEVICE_CREATE_INFO,
 		pNext                   = &vk.PhysicalDeviceFeatures2 {
 			sType = .PHYSICAL_DEVICE_FEATURES_2,
-			features = {
-				shaderInt64 = true
-			},
+			features = {shaderInt64 = true},
 			pNext = &vk.PhysicalDeviceVulkan13Features {
 				sType = .PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
 				pNext = &vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT {
@@ -198,7 +196,6 @@ vk_create_logical_device :: proc() {
 				},
 				synchronization2 = true,
 				dynamicRendering = true,
-				
 			},
 		},
 		pQueueCreateInfos       = &vk.DeviceQueueCreateInfo {
@@ -227,7 +224,8 @@ find_queue_family_indexes :: proc() -> bool {
 	graphics_idx := -1
 	present_idx := -1
 	for family, i in families {
-		support_graphics_and_compute := .GRAPHICS in family.queueFlags && .COMPUTE in family.queueFlags
+		support_graphics_and_compute :=
+			.GRAPHICS in family.queueFlags && .COMPUTE in family.queueFlags
 		support_present: b32
 		vk_try(
 			vk.GetPhysicalDeviceSurfaceSupportKHR(

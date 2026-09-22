@@ -1,12 +1,12 @@
 package lifegpu
 
 import "core:log"
-import os "core:os"
+import "core:os"
 import vk "vendor:vulkan"
 
 load_shaders_from_file :: proc(filename: string) -> (vk.ShaderModule, bool) {
-	bytes, success := os.read_entire_file(filename)
-	if !success {
+	bytes, err := os.read_entire_file(filename, context.allocator)
+	if err != os.General_Error.None {
 		return vk.ShaderModule{}, false
 	}
 	create_info := vk.ShaderModuleCreateInfo {
@@ -28,7 +28,7 @@ transition_image_layout :: proc(
 	old_layout, new_layout: vk.ImageLayout,
 	src_access_mask, dst_access_mask: vk.AccessFlags2,
 	src_stage_mask, dst_stage_mask: vk.PipelineStageFlags2,
-    aspect_mask: vk.ImageAspectFlags
+	aspect_mask: vk.ImageAspectFlags,
 ) {
 	barrier := vk.ImageMemoryBarrier2 {
 		sType = .IMAGE_MEMORY_BARRIER_2,
@@ -105,5 +105,5 @@ create_2d_image :: proc(
 	vk.GetImageMemoryRequirements(g_device, image, &mem_req)
 	mem = try_allocate(mem_req, {.DEVICE_LOCAL})
 	vk_try(vk.BindImageMemory(g_device, image, mem, 0))
-    return
+	return
 }

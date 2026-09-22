@@ -4,7 +4,7 @@ import "core:log"
 import "core:time"
 import vk "vendor:vulkan"
 
-SIMULATION_SHADER_BIN :: "shaders/bin/simulation.spv"
+SIMULATION_SHADER_BIN :: "shaders/simulation.spv"
 WORKGROUP_SIZE :: 16
 
 g_last_sim_update: time.Tick
